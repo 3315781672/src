@@ -216,22 +216,22 @@ jobs:
 
       # ── Generate build files ─────────────────────────────────────────
       # NOTE: use pipefail so ninja/gn failures are NOT masked by the tail pipe
-      - name: Run gclient hooks
+      - name: Run gclient hooks (show first 200 lines of output)
         run: |
           set -o pipefail
           cd "$GITHUB_WORKSPACE"
           # python must resolve to 2.7 for the py2 hooks
           echo "=== python resolved to: $(which python) ==="
-          gclient runhooks 2>&1 | tee /tmp/gclient_hooks.log | tail -120
+          gclient runhooks 2>&1 | tee /tmp/gclient_hooks.log | head -200
           echo "=== gclient runhooks exit: ${PIPESTATUS[0]} ==="
           echo "=== Toolchain binaries downloaded? ==="
           ls -la buildtools/linux64/gn 2>&1 || echo "MISSING gn!"
           ls third_party/llvm-build/Release+Asserts/bin/clang* 2>&1 | head -5 || echo "MISSING clang!"
 
-      - name: Generate Ninja files
+      - name: Generate Ninja files (show first 200 lines)
         run: |
           set -o pipefail
-          gn gen out/android_${{ matrix.platform }} 2>&1 | tee /tmp/gn_gen.log | tail -120
+          gn gen out/android_${{ matrix.platform }} 2>&1 | tee /tmp/gn_gen.log | head -200
           echo "=== gn gen exit: ${PIPESTATUS[0]} ==="
           echo "--- build.ninja present? ---"
           ls -la out/android_${{ matrix.platform }}/build.ninja 2>&1 || echo "MISSING build.ninja"
@@ -302,10 +302,18 @@ jobs:
           echo "=== Memory ===" && free -m
           echo "=== ccache ===" && ccache -s 2>/dev/null || true
 
-      - name: Build final APK
+      # ── Collect failure diagnostics in ninja log format ──────────────
+      - name: Collect ninja build logs (on failure before APK)
+        if: failure()
         run: |
-          set -o pipefail
-          ninja -C out/android_${{ matrix.platform }} chrome_public_apk 2>&1
+          echo "=== Checking what was built ==="
+          find out/android_${{ matrix.platform }}/ -name "*.stamp" -newer /tmp/gn_gen.log 2>/dev/null | head -20 || true
+          echo "=== Checking toolchain ==="
+          file out/android_${{ matrix.platform }}/clang* 2>/dev/null || true
+          ls third_party/llvm-build/Release+Asserts/bin/clang* 2>/dev/null | head -5 || echo "clang not found in tree"
+
+      - name: Build final APK (show ALL output, no pipe)
+        run: ninja -C out/android_${{ matrix.platform }} chrome_public_apk 2>&1
 
       # ── Collect failure diagnostics ──────────────────────────────────
       - name: Collect build logs (on failure)
