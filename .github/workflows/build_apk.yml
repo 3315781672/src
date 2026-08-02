@@ -21,7 +21,10 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    # ubuntu-20.04 is the LAST GitHub runner with Python 2.7 pre-installed,
+    # which Chromium 77 requires. This runner is NOT yet deprecated (it has
+    # extended support). We stay on 20.04 rather than fighting the py2/py3 mess.
+    runs-on: ubuntu-20.04
     timeout-minutes: 420
 
     strategy:
@@ -77,29 +80,16 @@ jobs:
           ls -la ..
 
       # ── Install build tools ──────────────────────────────────────────
-      # CRITICAL: Chromium 77 build system (.vpython, DEPS hooks) requires
-      # Python 2.7. actions/setup-python@v5 dropped 2.7 support, so we use
-      # the deadsnakes PPA (the canonical source for old Python on Ubuntu).
-      - name: Install Python 2.7 via deadsnakes PPA
+      # On ubuntu-20.04, python (2.7) is pre-installed. We need it for
+      # Chromium 77's build hooks (.vpython says 2.7). We also need python3
+      # for modern depot_tools/gclient. Do NOT install python-is-python3.
+      - name: Install build dependencies
         run: |
-          sudo add-apt-repository ppa:deadsnakes/ppa -y
           sudo apt-get update
-          sudo apt-get install -y python2.7
-          # Make python resolve to python2.7 for the Chromium hooks
-          sudo ln -sf /usr/bin/python2.7 /usr/local/bin/python
+          # python (2.7) is already present on ubuntu-20.04. Verify:
           python --version
           python3 --version
-
-      - name: Install Java 8
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '8'
-
-      - name: Install system packages
-        run: |
-          sudo apt-get update
-          # Essential packages (NO python-is-python3 — python must stay 2.7)
+          # Install everything else
           sudo apt-get install -y \
             python3 \
             libncurses5 \
@@ -137,10 +127,6 @@ jobs:
             curl \
             git \
             file
-          echo "=== Python check ==="
-          python --version 2>&1 || echo "python not found"
-          python2 --version 2>&1 || echo "python2 not found"
-          python3 --version 2>&1 || echo "python3 not found"
           echo "Packages installed."
 
       - name: Install Chromium build deps
