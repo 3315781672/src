@@ -78,14 +78,17 @@ jobs:
 
       # ── Install build tools ──────────────────────────────────────────
       # CRITICAL: Chromium 77 build system (.vpython, DEPS hooks) requires
-      # Python 2.7. actions/setup-python provides it as `python`.
-      # We need BOTH: python2.7 (for the old Chromium hooks) and python3
-      # (for modern depot_tools/gclient). setup-python only touches `python`,
-      # leaving the system python3 untouched.
-      - name: Install Python 2.7 (required by Chromium 77 hooks)
-        uses: actions/setup-python@v5
-        with:
-          python-version: '2.7'
+      # Python 2.7. actions/setup-python@v5 dropped 2.7 support, so we use
+      # the deadsnakes PPA (the canonical source for old Python on Ubuntu).
+      - name: Install Python 2.7 via deadsnakes PPA
+        run: |
+          sudo add-apt-repository ppa:deadsnakes/ppa -y
+          sudo apt-get update
+          sudo apt-get install -y python2.7
+          # Make python resolve to python2.7 for the Chromium hooks
+          sudo ln -sf /usr/bin/python2.7 /usr/local/bin/python
+          python --version
+          python3 --version
 
       - name: Install Java 8
         uses: actions/setup-java@v4
