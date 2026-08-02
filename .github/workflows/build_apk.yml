@@ -77,6 +77,16 @@ jobs:
           ls -la ..
 
       # ── Install build tools ──────────────────────────────────────────
+      # CRITICAL: Chromium 77 build system (.vpython, DEPS hooks) requires
+      # Python 2.7. actions/setup-python provides it as `python`.
+      # We need BOTH: python2.7 (for the old Chromium hooks) and python3
+      # (for modern depot_tools/gclient). setup-python only touches `python`,
+      # leaving the system python3 untouched.
+      - name: Install Python 2.7 (required by Chromium 77 hooks)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '2.7'
+
       - name: Install Java 8
         uses: actions/setup-java@v4
         with:
@@ -86,10 +96,9 @@ jobs:
       - name: Install system packages
         run: |
           sudo apt-get update
-          # Essential packages
+          # Essential packages (NO python-is-python3 — python must stay 2.7)
           sudo apt-get install -y \
             python3 \
-            python-is-python3 \
             libncurses5 \
             ccache \
             ninja-build \
@@ -125,15 +134,19 @@ jobs:
             curl \
             git \
             file
+          echo "=== Python check ==="
+          python --version 2>&1 || echo "python not found"
+          python2 --version 2>&1 || echo "python2 not found"
+          python3 --version 2>&1 || echo "python3 not found"
           echo "Packages installed."
 
       - name: Install Chromium build deps
         run: |
           # install-build-deps.sh may fail on ubuntu-22.04 for some packages, use --unsupported
           sudo bash install-build-deps.sh --no-chromeos-fonts --no-prompt --unsupported 2>&1 || echo "Some build deps not installed (non-fatal)"
-          # Install sysroots (needed for cross-compiling)
-          python3 build/linux/sysroot_scripts/install-sysroot.py --arch=i386 2>&1 || echo "i386 sysroot not available"
-          python3 build/linux/sysroot_scripts/install-sysroot.py --arch=amd64 2>&1 || echo "amd64 sysroot not available"
+          # Install sysroots (must use python2.7 — script uses py2 syntax)
+          python build/linux/sysroot_scripts/install-sysroot.py --arch=i386 2>&1 || echo "i386 sysroot not available"
+          python build/linux/sysroot_scripts/install-sysroot.py --arch=amd64 2>&1 || echo "amd64 sysroot not available"
 
       # ── Setup depot_tools ────────────────────────────────────────────
       - name: Clone depot_tools
@@ -197,15 +210,13 @@ jobs:
           cat out/android_${{ matrix.platform }}/args.gn
 
       # ── Set Chromium version ─────────────────────────────────────────
-      - name: Fetch Chromium stable version
+      # CRITICAL: use the repo's OWN chrome/VERSION (Chromium 77), do NOT
+      # overwrite it with the latest stable — the pinned DEPS won't match.
+      - name: Verify Chromium version
         run: |
-          mkdir -p chrome
-          curl -sL "https://omahaproxy.appspot.com/all" \
-            | grep -Fi "android,stable" \
-            | cut -f3 -d"," \
-            | awk '{split($0,a,"."); print "MAJOR=" a[1] "\nMINOR=" a[2] "\nBUILD=" a[3] "\nPATCH=" a[4]}' \
-            > chrome/VERSION 2>/dev/null || echo -e "MAJOR=77\nMINOR=0\nBUILD=3865\nPATCH=0" > chrome/VERSION
+          echo "=== Repo VERSION ==="
           cat chrome/VERSION
+          echo "=== Keeping repo VERSION (do not fetch latest) ==="
 
       # ── Generate build files ─────────────────────────────────────────
       # NOTE: use pipefail so ninja/gn failures are NOT masked by the tail pipe
@@ -213,13 +224,18 @@ jobs:
         run: |
           set -o pipefail
           cd "$GITHUB_WORKSPACE"
-          gclient runhooks 2>&1 | tee /tmp/gclient_hooks.log | tail -100
+          # python must resolve to 2.7 for the py2 hooks
+          echo "=== python resolved to: $(which python) ==="
+          gclient runhooks 2>&1 | tee /tmp/gclient_hooks.log | tail -120
           echo "=== gclient runhooks exit: ${PIPESTATUS[0]} ==="
+          echo "=== Toolchain binaries downloaded? ==="
+          ls -la buildtools/linux64/gn 2>&1 || echo "MISSING gn!"
+          ls third_party/llvm-build/Release+Asserts/bin/clang* 2>&1 | head -5 || echo "MISSING clang!"
 
       - name: Generate Ninja files
         run: |
           set -o pipefail
-          gn gen out/android_${{ matrix.platform }} 2>&1 | tee /tmp/gn_gen.log | tail -100
+          gn gen out/android_${{ matrix.platform }} 2>&1 | tee /tmp/gn_gen.log | tail -120
           echo "=== gn gen exit: ${PIPESTATUS[0]} ==="
           echo "--- build.ninja present? ---"
           ls -la out/android_${{ matrix.platform }}/build.ninja 2>&1 || echo "MISSING build.ninja"
@@ -294,6 +310,30 @@ jobs:
         run: |
           set -o pipefail
           ninja -C out/android_${{ matrix.platform }} chrome_public_apk 2>&1
+
+      # ── Collect failure diagnostics ──────────────────────────────────
+      - name: Collect build logs (on failure)
+        if: failure()
+        run: |
+          mkdir -p /tmp/fail-logs
+          cp /tmp/gclient_hooks.log /tmp/fail-logs/ 2>/dev/null || true
+          cp /tmp/gn_gen.log /tmp/fail-logs/ 2>/dev/null || true
+          cp /tmp/stage1.log /tmp/fail-logs/ 2>/dev/null || true
+          cp out/android_${{ matrix.platform }}/gn_logs.txt /tmp/fail-logs/ 2>/dev/null || true
+          echo "=== gn_logs.txt tail ==="
+          tail -80 out/android_${{ matrix.platform }}/gn_logs.txt 2>/dev/null || echo "no gn_logs.txt"
+          echo "=== ninja log tail (build.ninja) ==="
+          ls -la out/android_${{ matrix.platform }}/ 2>/dev/null | head -30
+          echo "=== error files ==="
+          find out/android_${{ matrix.platform }}/ -name "*.stamp" -newer /tmp/gn_gen.log 2>/dev/null | head -5 || true
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fail-diagnostics-${{ matrix.platform }}
+          path: /tmp/fail-logs/
+          if-no-files-found: ignore
 
       - name: Post-build ccache stats
         if: always()
