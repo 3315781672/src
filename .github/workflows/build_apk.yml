@@ -403,6 +403,8 @@ jobs:
             Based on [Kiwi Browser](https://github.com/kiwibrowser/src) with Chrome Extension support, Night Mode, and bottom address bar. Licensed under Chromium's license.
           draft: false
           prerelease: true
-          files: apks/**/ChromePublic.apk
+          files: |
+            apks/**/ChromePublic.apk
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
