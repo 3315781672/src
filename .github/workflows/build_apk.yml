@@ -377,7 +377,13 @@ jobs:
           merge-multiple: true
 
       - name: List artifacts
-        run: find apks -type f -ls
+        run: |
+          echo "=== Downloaded files ==="
+          find apks -type f -ls 2>/dev/null || echo "No artifacts found"
+          echo "=== APK files ==="
+          find apks -name "*.apk" -type f -ls 2>/dev/null || echo "No APK files (per architecture downloads)"
+          # Don't fail if no files — the build job may have failed
+          exit 0
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
