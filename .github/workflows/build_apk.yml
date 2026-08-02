@@ -208,13 +208,23 @@ jobs:
           cat chrome/VERSION
 
       # ── Generate build files ─────────────────────────────────────────
+      # NOTE: use pipefail so ninja/gn failures are NOT masked by the tail pipe
       - name: Run gclient hooks
         run: |
+          set -o pipefail
           cd "$GITHUB_WORKSPACE"
-          gclient runhooks 2>&1 | tail -50
+          gclient runhooks 2>&1 | tee /tmp/gclient_hooks.log | tail -100
+          echo "=== gclient runhooks exit: ${PIPESTATUS[0]} ==="
 
       - name: Generate Ninja files
-        run: gn gen out/android_${{ matrix.platform }} 2>&1 | tail -50
+        run: |
+          set -o pipefail
+          gn gen out/android_${{ matrix.platform }} 2>&1 | tee /tmp/gn_gen.log | tail -100
+          echo "=== gn gen exit: ${PIPESTATUS[0]} ==="
+          echo "--- build.ninja present? ---"
+          ls -la out/android_${{ matrix.platform }}/build.ninja 2>&1 || echo "MISSING build.ninja"
+          echo "--- gn error log (if any) ---"
+          cat out/android_${{ matrix.platform }}/gn_logs.txt 2>/dev/null | tail -50 || true
 
       - name: Pre-build status
         run: |
@@ -223,45 +233,55 @@ jobs:
           echo "=== ccache ===" && ccache -s 2>/dev/null || echo "ccache empty"
 
       # ── Compile in stages ────────────────────────────────────────────
+      # NOTE: set -o pipefail is CRITICAL — without it, `ninja | tail` masks
+      # the real exit code and GitHub marks failed builds as "success".
       # Stage 1: base + content
       - name: Build stage 1 - base + content
         run: |
-          ninja -C out/android_${{ matrix.platform }} base 2>&1 | tail -30
-          ninja -C out/android_${{ matrix.platform }} content/public/common 2>&1 | tail -30
-          ninja -C out/android_${{ matrix.platform }} content/public/browser 2>&1 | tail -30
+          set -o pipefail
+          ninja -C out/android_${{ matrix.platform }} base 2>&1 | tee /tmp/stage1.log | tail -60
+          echo "=== stage1 base exit: ${PIPESTATUS[0]} ==="
+          ninja -C out/android_${{ matrix.platform }} content/public/common 2>&1 | tail -60
+          ninja -C out/android_${{ matrix.platform }} content/public/browser 2>&1 | tail -60
 
       # Stage 2: guest_view + gpu
       - name: Build stage 2 - guest_view + gpu
         run: |
-          ninja -C out/android_${{ matrix.platform }} components/guest_view/common 2>&1 | tail -20
-          ninja -C out/android_${{ matrix.platform }} components/guest_view/renderer 2>&1 | tail -20
-          ninja -C out/android_${{ matrix.platform }} chrome/gpu 2>&1 | tail -20
+          set -o pipefail
+          ninja -C out/android_${{ matrix.platform }} components/guest_view/common 2>&1 | tail -60
+          ninja -C out/android_${{ matrix.platform }} components/guest_view/renderer 2>&1 | tail -60
+          ninja -C out/android_${{ matrix.platform }} chrome/gpu 2>&1 | tail -60
 
       # Stage 3: Java + UI
       - name: Build stage 3 - Java + UI
         run: |
-          ninja -C out/android_${{ matrix.platform }} chrome_java 2>&1 | tail -30
-          ninja -C out/android_${{ matrix.platform }} components/version_info 2>&1 | tail -20
-          ninja -C out/android_${{ matrix.platform }} ui/base 2>&1 | tail -20
-          ninja -C out/android_${{ matrix.platform }} chrome/browser:resources 2>&1 | tail -20
+          set -o pipefail
+          ninja -C out/android_${{ matrix.platform }} chrome_java 2>&1 | tail -60
+          ninja -C out/android_${{ matrix.platform }} components/version_info 2>&1 | tail -60
+          ninja -C out/android_${{ matrix.platform }} ui/base 2>&1 | tail -60
+          ninja -C out/android_${{ matrix.platform }} chrome/browser:resources 2>&1 | tail -60
 
       # Stage 4: chrome browser
       - name: Build stage 4 - chrome browser
         run: |
-          ninja -C out/android_${{ matrix.platform }} chrome/browser/ui 2>&1 | tail -30
-          ninja -C out/android_${{ matrix.platform }} chrome/browser 2>&1 | tail -30
-          ninja -C out/android_${{ matrix.platform }} chrome/common 2>&1 | tail -20
-          ninja -C out/android_${{ matrix.platform }} chrome/renderer 2>&1 | tail -20
+          set -o pipefail
+          ninja -C out/android_${{ matrix.platform }} chrome/browser/ui 2>&1 | tail -60
+          ninja -C out/android_${{ matrix.platform }} chrome/browser 2>&1 | tail -60
+          ninja -C out/android_${{ matrix.platform }} chrome/common 2>&1 | tail -60
+          ninja -C out/android_${{ matrix.platform }} chrome/renderer 2>&1 | tail -60
 
       # Stage 5: extensions + services
       - name: Build stage 5 - extensions + services
         run: |
-          ninja -C out/android_${{ matrix.platform }} extensions 2>&1 | tail -30
-          ninja -C out/android_${{ matrix.platform }} services 2>&1 | tail -30
+          set -o pipefail
+          ninja -C out/android_${{ matrix.platform }} extensions 2>&1 | tail -60
+          ninja -C out/android_${{ matrix.platform }} services 2>&1 | tail -60
 
       # Stage 6: v8
       - name: Build stage 6 - v8
-        run: ninja -C out/android_${{ matrix.platform }} v8 2>&1 | tail -30
+        run: |
+          set -o pipefail
+          ninja -C out/android_${{ matrix.platform }} v8 2>&1 | tail -60
 
       # Stage 7: final APK
       - name: Pre-APK resource check
@@ -271,7 +291,9 @@ jobs:
           echo "=== ccache ===" && ccache -s 2>/dev/null || true
 
       - name: Build final APK
-        run: ninja -C out/android_${{ matrix.platform }} chrome_public_apk 2>&1
+        run: |
+          set -o pipefail
+          ninja -C out/android_${{ matrix.platform }} chrome_public_apk 2>&1
 
       - name: Post-build ccache stats
         if: always()
