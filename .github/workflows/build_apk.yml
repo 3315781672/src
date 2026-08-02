@@ -313,7 +313,9 @@ jobs:
           ls third_party/llvm-build/Release+Asserts/bin/clang* 2>/dev/null | head -5 || echo "clang not found in tree"
 
       - name: Build final APK (show ALL output, no pipe)
-        run: ninja -C out/android_${{ matrix.platform }} chrome_public_apk 2>&1
+        run: |
+          set -o pipefail
+          ninja -C out/android_${{ matrix.platform }} chrome_public_apk 2>&1 | tee /tmp/ninja_apk.log | tail -200
 
       # ── Collect failure diagnostics ──────────────────────────────────
       - name: Collect build logs (on failure)
